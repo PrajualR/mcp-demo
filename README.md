@@ -52,7 +52,6 @@ The LLM must determine which MCP tools are required to answer the question.
 
 ---
 
-
 # Project Structure
 
 ```text
@@ -80,7 +79,6 @@ mcp-demo/
 ```
 
 ---
-
 
 # MCP Server
 
@@ -169,13 +167,13 @@ search_tickets(
 
 ---
 
-## 1. What is MCP?
+# 1. What is MCP?
 
 **Model Context Protocol (MCP)** is an open protocol that standardizes how AI applications connect to external tools, data, and context.
 
-Instead of every AI application implementing a different integration mechanism for every external system, MCP provides a common interface between an AI application and the systems that provide capabilities or context.
+It defines a common way for an AI application to discover and interact with capabilities exposed by an MCP server.
 
-Conceptually:
+At a high level:
 
 ```text
 AI Application
@@ -191,13 +189,535 @@ MCP Server
 External systems / data
 ```
 
+MCP separates the mechanism used to provide capabilities and context from the LLM itself.
+
+The LLM can be from one provider while the MCP server can be implemented independently.
+
 Official documentation:
 
 https://modelcontextprotocol.io/
 
 ---
 
-# 2. Why MCP?
+# 2. MCP Architecture: Host, Client and Server
+
+Three terms are important to understand.
+
+## Host
+
+The **host** is the AI application that the user interacts with.
+
+The host contains or manages the AI experience and can use one or more MCP clients.
+
+Conceptually:
+
+```text
+Host / AI Application
+        |
+        +-- MCP Client
+        |
+        +-- LLM
+```
+
+## Client
+
+The **MCP client** is the component responsible for communicating with an MCP server.
+
+It manages the MCP connection, initialization, capability negotiation, discovery, and requests.
+
+```text
+Host
+ |
+MCP Client
+ |
+MCP Server
+```
+
+## Server
+
+The **MCP server** exposes capabilities that an MCP client can discover and use.
+
+These capabilities can include:
+
+- Tools
+- Resources
+- Prompts
+
+Therefore:
+
+```text
+Host
+ |
+MCP Client
+ |
+MCP Server
+ |      |      |
+Tools Resources Prompts
+```
+
+### Important distinction
+
+The **LLM is not the MCP server**.
+
+The LLM provides reasoning and decides what information or capability it needs.
+
+The MCP client communicates with the MCP server and executes the requested MCP operations.
+
+---
+
+# 3. How MCP Communication Works
+
+MCP communication follows a client-server model.
+
+A simplified flow is:
+
+```text
+User
+ |
+ v
+AI Application / Host
+ |
+ v
+LLM
+ |
+ | decides a tool is required
+ v
+MCP Client
+ |
+ | MCP request
+ v
+MCP Server
+ |
+ | executes capability
+ v
+Tool Result
+ |
+ v
+MCP Client
+ |
+ v
+LLM
+ |
+ v
+Final Answer
+```
+
+The LLM does not directly execute the Python function on the MCP server.
+
+The LLM produces a tool request.
+
+The MCP client receives that request and performs the MCP tool call.
+
+---
+
+# 4. MCP Lifecycle
+
+Before the client can use MCP capabilities, the client and server establish an MCP session.
+
+A simplified lifecycle is:
+
+```text
+1. Connect
+     |
+     v
+2. Initialize
+     |
+     v
+3. Capability Negotiation
+     |
+     v
+4. Discover Capabilities
+     |
+     v
+5. Call Tools / Read Resources / Get Prompts
+     |
+     v
+6. Receive Results
+     |
+     v
+7. Continue or End Session
+```
+
+## Initialize
+
+The client starts the MCP session by sending an initialization request.
+
+In this project:
+
+```python
+await session.initialize()
+```
+
+This establishes the protocol session and allows the client and server to negotiate supported capabilities.
+
+## Discover
+
+After initialization, the client can discover the capabilities exposed by the server.
+
+For tools:
+
+```python
+response = await session.list_tools()
+```
+
+The client receives information such as:
+
+- Tool name
+- Tool description
+- Input schema
+
+## Call
+
+Once a tool has been selected, the client calls it:
+
+```python
+result = await session.call_tool(
+    tool_name,
+    arguments,
+)
+```
+
+## Result
+
+The MCP server executes the tool and returns the result to the client.
+
+The client can then provide that result to the LLM.
+
+---
+
+# 5. What is MCP Transport?
+
+A **transport** is the communication mechanism used to carry MCP messages between the client and server.
+
+Transport is different from MCP itself.
+
+Think of it as:
+
+```text
+MCP
+ |
+ +-- Defines the protocol and message interaction
+ |
+ +-- Transport carries those messages
+```
+
+Common MCP transports include:
+
+- stdio
+- Streamable HTTP
+- Legacy HTTP + SSE
+
+The transport determines **how the client and server communicate**, while MCP defines **what they communicate and how the protocol works**.
+
+---
+
+# 6. What is stdio?
+
+`stdio` stands for **standard input/output**.
+
+In the stdio transport, the MCP client starts the MCP server as a local subprocess and communicates with it through:
+
+```text
+stdin  → messages to the server
+stdout ← messages from the server
+```
+
+Conceptually:
+
+```text
+MCP Client Process
+       |
+       | stdin / stdout
+       |
+       v
+MCP Server Process
+```
+
+In this project, the client starts the server using:
+
+```python
+server_params = StdioServerParameters(
+    command="uv",
+    args=[
+        "run",
+        "mcp",
+        "run",
+        "src/server/server.py",
+    ],
+)
+```
+
+Then:
+
+```python
+async with stdio_client(server_params) as (read, write):
+```
+
+creates the communication channel.
+
+### Why use stdio here?
+
+stdio is useful for:
+
+- Local development
+- Local MCP servers
+- Command-line integrations
+- Servers launched as child processes
+- Simple demonstrations
+
+It does not require the MCP server to expose a network port.
+
+### Important
+
+`stdio` is **not another MCP protocol**.
+
+It is a transport used to carry MCP communication.
+
+---
+
+# 7. Other MCP Transports
+
+## Streamable HTTP
+
+**Streamable HTTP** is designed for MCP servers that are accessed over HTTP.
+
+Conceptually:
+
+```text
+AI Application
+      |
+      | HTTP
+      |
+      v
+MCP Server
+```
+
+This is appropriate when the MCP server is:
+
+- Remote
+- Deployed as a service
+- Shared across applications
+- Running independently of the client process
+
+A client can connect to an MCP endpoint such as:
+
+```text
+https://example.com/mcp
+```
+
+Streamable HTTP is the current transport to consider for remote deployments.
+
+## SSE
+
+Earlier MCP implementations used **HTTP + Server-Sent Events (SSE)**.
+
+It is now considered a legacy transport and is maintained mainly for compatibility with older MCP implementations.
+
+For new remote deployments, Streamable HTTP is preferred.
+
+### Transport comparison
+
+| Transport | Typical Use |
+|---|---|
+| stdio | Local process / local development |
+| Streamable HTTP | Remote or deployed MCP servers |
+| SSE | Legacy compatibility |
+
+---
+
+# 8. Tools, Resources and Prompts
+
+MCP defines different types of capabilities.
+
+## Tools
+
+Tools are callable capabilities.
+
+They can perform operations such as:
+
+```text
+search_customer()
+create_ticket()
+query_database()
+send_email()
+```
+
+Tools are generally used when the model needs to **perform an operation or request a computation/action**.
+
+This project primarily demonstrates MCP tools.
+
+## Resources
+
+Resources expose data or context that can be read by the client.
+
+For example:
+
+```text
+file://documents/customer-policy.pdf
+```
+
+or another URI identifying a piece of data.
+
+Resources are generally read-oriented.
+
+## Prompts
+
+Prompts are reusable prompt templates exposed by an MCP server.
+
+They can help standardize how users or applications invoke particular workflows.
+
+### Simple distinction
+
+```text
+Tools
+→ Do something
+
+Resources
+→ Provide data/context
+
+Prompts
+→ Provide reusable prompt templates
+```
+
+---
+
+# 9. How the LLM and MCP Work Together
+
+MCP itself does not decide which tool should be used.
+
+The LLM is responsible for reasoning about the user's request and selecting an appropriate capability.
+
+The application connects the two.
+
+The flow is:
+
+```text
+User Question
+      |
+      v
+LLM
+      |
+      | Tool request
+      v
+MCP Client
+      |
+      | MCP call
+      v
+MCP Server
+      |
+      v
+Tool
+      |
+      v
+Tool Result
+      |
+      v
+MCP Client
+      |
+      v
+LLM
+      |
+      v
+Final Answer
+```
+
+The important separation is:
+
+```text
+LLM
+→ Reasoning / tool selection
+
+MCP Client
+→ MCP communication
+
+MCP Server
+→ Capability implementation
+```
+
+---
+
+# 10. MCP Tool Discovery
+
+One of the important parts of MCP is **capability discovery**.
+
+The client does not have to assume that the server provides a particular set of tools.
+
+It can ask the server what tools are available.
+
+Conceptually:
+
+```text
+Client
+   |
+   | tools/list
+   v
+Server
+   |
+   | Tool definitions
+   v
+Client
+```
+
+The returned tool information includes details such as:
+
+```text
+Tool name
+Description
+Input schema
+```
+
+The application can then provide these tool definitions to the LLM.
+
+This allows the LLM to reason about the available capabilities.
+
+---
+
+# 11. MCP Tool Calling
+
+After the LLM decides that a tool is required, the application performs the MCP tool call.
+
+Conceptually:
+
+```text
+LLM
+ |
+ | "Call search_tickets with these arguments"
+ v
+MCP Client
+ |
+ | tools/call
+ v
+MCP Server
+ |
+ v
+Tool Execution
+ |
+ v
+Result
+```
+
+The result is then returned to the LLM as part of the conversation.
+
+The LLM may decide that another tool is required.
+
+This can produce a multi-step workflow:
+
+```text
+LLM
+ |
+ +-- Tool A
+ |
+ +-- Tool B
+ |
+ +-- Tool C
+ |
+ v
+Final Answer
+```
+
+---
+
+# 12. Why MCP?
 
 A common question is:
 
@@ -207,27 +727,25 @@ The short answer is:
 
 **We can. MCP is not a replacement for APIs or normal function calls.**
 
-For a small application, direct function calls may be simpler and completely appropriate.
+For a small, tightly controlled application, direct function calls may be simpler and more appropriate.
 
-The value of MCP becomes more apparent when an AI application needs to work with many different tools and external systems.
+MCP becomes valuable when AI applications need standardized access to multiple capabilities and external systems.
 
-Without MCP, an AI application may need custom integration code for every system:
+Without a common protocol, applications may build custom integration logic for each system:
 
 ```text
 AI Application
    |
-   +-- Custom Salesforce integration
-   |
    +-- Custom Jira integration
    |
-   +-- Custom Database integration
-   |
    +-- Custom GitHub integration
+   |
+   +-- Custom Database integration
    |
    +-- Custom File integration
 ```
 
-With MCP, those systems can expose standardized MCP interfaces:
+With MCP:
 
 ```text
                     AI Application
@@ -238,38 +756,101 @@ With MCP, those systems can expose standardized MCP interfaces:
               |           |           |
           MCP Server   MCP Server   MCP Server
               |           |           |
-           Jira        Database      GitHub
+            Jira       Database      GitHub
 ```
 
-The AI application can interact with MCP servers through a standardized protocol instead of implementing a completely different integration mechanism for every MCP-enabled system.
+The integration boundary becomes standardized.
 
 ---
 
-# 3. MCP Does Not Replace APIs
+# 13. MCP vs Direct Function Calls
 
-MCP and APIs solve different problems.
-
-An API answers:
-
-> How can one software system communicate with another software system?
-
-MCP answers:
-
-> How can an AI application discover and interact with capabilities and context provided to it?
+Direct function calling is a valid approach.
 
 For example:
 
 ```text
 Application
     |
-    | REST API
-    v
-Jira
+    +-- get_customer()
+    +-- search_orders()
+    +-- calculate_price()
 ```
 
-is completely valid.
+The functions are directly implemented and controlled by the application.
 
-An MCP server could internally use the Jira REST API:
+With MCP:
+
+```text
+Application
+    |
+MCP Client
+    |
+MCP Server
+    |
+    +-- get_customer()
+    +-- search_orders()
+    +-- calculate_price()
+```
+
+The capabilities are exposed through the MCP protocol.
+
+### Key difference
+
+Direct function calls:
+
+- Tightly coupled to the application
+- Simple for small systems
+- No additional protocol layer required
+
+MCP:
+
+- Standardized client-server interface
+- Capabilities can be exposed independently
+- Easier to reuse MCP servers across compatible AI applications
+- Supports capability discovery
+- Separates the capability provider from the consuming application
+
+### Important conclusion
+
+MCP is **not automatically better** than direct function calls.
+
+The right choice depends on the architecture and requirements.
+
+---
+
+# 14. MCP vs REST API
+
+REST and MCP solve different problems.
+
+REST is primarily an API style for communication between software systems.
+
+```text
+Application
+    |
+    | HTTP request
+    v
+REST API
+    |
+    v
+Service
+```
+
+MCP is a protocol designed for AI applications to interact with capabilities and context.
+
+```text
+AI Application
+    |
+MCP Client
+    |
+MCP Server
+    |
+Service / Database / API
+```
+
+An MCP server can internally call a REST API.
+
+For example:
 
 ```text
 LLM
@@ -278,73 +859,24 @@ MCP Client
  |
 MCP Server
  |
-Jira REST API
+REST API
  |
-Jira
+External System
 ```
 
-Therefore:
+Therefore, MCP does not replace REST.
 
-**MCP can sit on top of existing APIs.**
-
-It does not require replacing the underlying API.
+It can provide an AI-oriented interface over existing services and APIs.
 
 ---
 
-# 21. When MCP Becomes Valuable
-
-MCP becomes more useful when:
-
-- Multiple AI applications need the same tools.
-- Tools belong to different systems.
-- Tool discovery is important.
-- Standardized integration is desired.
-- The organization has many AI applications.
-- External capabilities need to be exposed consistently.
-- The same MCP server should be usable by different MCP-compatible hosts.
-
----
-
-# 22. MCP vs REST API
-
-REST API:
-
-```text
-Application
-    |
-    | HTTP request
-    v
-Service
-```
-
-MCP:
-
-```text
-AI Application
-    |
-    | MCP
-    v
-MCP Server
-    |
-    v
-Service / Database / API
-```
-
-REST is primarily an application/service communication mechanism.
-
-MCP is designed around providing AI applications standardized access to tools and context.
-
-An MCP server can itself call REST APIs.
-
----
-
-# 23. MCP vs RAG
+# 15. MCP vs RAG
 
 MCP and RAG solve different problems.
 
-### RAG
+## RAG
 
-RAG focuses on:
+RAG focuses on retrieving relevant information and providing it to the LLM.
 
 ```text
 Documents
@@ -356,14 +888,14 @@ Relevant Context
 LLM
 ```
 
-Its primary purpose is retrieving relevant information for the model.
+The primary purpose is information retrieval and grounding.
 
-### MCP
+## MCP
 
-MCP provides standardized access to capabilities and context:
+MCP provides a standardized protocol through which an AI application can access capabilities and context.
 
 ```text
-LLM Application
+AI Application
       |
    MCP Client
       |
@@ -374,11 +906,29 @@ LLM Application
 Tool Data API
 ```
 
-MCP can therefore provide a tool that performs retrieval, but MCP itself is not a RAG technique.
+An MCP server could expose a retrieval tool.
+
+For example:
+
+```text
+search_documents()
+```
+
+That tool could internally use a vector database.
+
+However:
+
+**MCP is not RAG.**
+
+RAG is a retrieval architecture.
+
+MCP is an integration protocol.
+
+They can be used together.
 
 ---
 
-# 24. MCP vs LangChain Tools
+# 16. MCP vs LangChain Tools
 
 LangChain can provide tools to an agent within a LangChain application.
 
@@ -392,11 +942,9 @@ LangChain Agent
      +-- Tool C
 ```
 
-MCP standardizes the communication between AI applications and external capability providers.
+MCP standardizes communication between AI applications and external capability providers.
 
-They can also work together.
-
-For example:
+They can also work together:
 
 ```text
 LangChain Agent
@@ -408,29 +956,43 @@ LangChain Agent
     Tools
 ```
 
-Therefore MCP and LangChain are not necessarily competitors.
+Therefore, MCP and LangChain tools are not direct replacements for each other.
+
+LangChain is an application/agent framework.
+
+MCP is a protocol for connecting applications to external capabilities and context.
 
 ---
 
-# 25. MCP and Agents
+# 17. MCP and Agents
 
-An agent generally involves:
+An agent typically involves a loop such as:
 
 ```text
 LLM
- +
-Tool selection
- +
-Execution
- +
-Observation
- +
-Further reasoning
+ |
+ | Decide
+ v
+Tool Selection
+ |
+ v
+Tool Execution
+ |
+ v
+Observation / Result
+ |
+ v
+Further Reasoning
+ |
+ +-----> Another Tool
+ |
+ v
+Final Answer
 ```
 
-MCP provides a standardized way for the agent/application to access external capabilities.
+MCP does not create the agent.
 
-Therefore:
+Instead, MCP can provide the tools that an agent uses.
 
 ```text
 Agent
@@ -444,78 +1006,19 @@ Agent
                   +-- Tool
 ```
 
-MCP is the integration protocol, not the agent itself.
+Therefore:
+
+**Agent = reasoning/orchestration approach**
+
+**MCP = standardized capability integration protocol**
+
+They can be used together.
 
 ---
 
-# 26. MCP Host, Client and Server
+# 18. Security Considerations
 
-These terms are easy to confuse.
-
-### Host
-
-The host is the AI application that the user interacts with.
-
-Examples can include an AI coding application or another AI-enabled application.
-
-### Client
-
-The MCP client manages the connection between the host/application and an MCP server.
-
-### Server
-
-The MCP server exposes capabilities such as tools, resources, and prompts.
-
-In this project:
-
-```text
-Our Python application
-        |
-        +-- MCP Client
-                |
-                v
-        Our MCP Server
-```
-
-The Groq LLM is the model being used by the application; it is not the MCP server.
-
----
-
-# 27. Tools, Resources and Prompts
-
-MCP supports different primitives.
-
-## Tools
-
-Tools represent callable capabilities.
-
-Examples:
-
-```text
-search_customer()
-create_ticket()
-query_database()
-```
-
-The current project primarily demonstrates tools.
-
-## Resources
-
-Resources represent data that an MCP client can read.
-
-They are useful when the server exposes context/data identified by URIs.
-
-## Prompts
-
-Prompts are reusable prompt templates exposed by an MCP server.
-
-The current project does not implement resources or prompts because they are not required for the core project-intelligence use case.
-
----
-
-# 28. Security Considerations
-
-MCP does not automatically make a system secure.
+MCP does not automatically make an application secure.
 
 A production MCP implementation should consider:
 
@@ -530,17 +1033,17 @@ A production MCP implementation should consider:
 - Sensitive data handling
 - Tool execution boundaries
 
-For example, a read-only project analysis server should not automatically have permission to modify project records.
+A server exposing a capability should have only the permissions required for that capability.
 
-A useful principle is:
+For example, a read-only tool should not automatically have permission to modify the underlying system.
 
-> Give an MCP server only the permissions required for the capabilities it exposes.
+Security becomes especially important when MCP servers expose tools capable of performing external side effects.
 
 ---
 
-# 29. Error Handling
+# 19. Error Handling
 
-A production implementation should also handle:
+A production implementation should handle:
 
 - MCP connection failures
 - Invalid tool arguments
@@ -550,14 +1053,23 @@ A production implementation should also handle:
 - Authentication failures
 - Malformed tool responses
 - Network failures
+- Unavailable MCP servers
+
+The client should not blindly trust every tool result.
+
+Tool results and errors should be validated before being passed into subsequent processing.
 
 The current project is a learning/demo implementation, so error handling is intentionally lightweight.
 
 ---
 
-# 30. Why the Tool Descriptions Matter
+# 20. Why Tool Descriptions and Schemas Matter
 
-The tool docstrings in `server.py` are important.
+MCP tool definitions contain information such as:
+
+- Tool name
+- Description
+- Input schema
 
 For example:
 
@@ -574,235 +1086,481 @@ def search_tickets(
     """
 ```
 
-The description helps the client/model understand what the tool does and what inputs it accepts.
+The description explains the purpose of the tool.
 
-Therefore MCP tool design is not only about writing executable code.
+The input schema tells the client/model what arguments the tool accepts.
 
-Good tool names, descriptions, and schemas are important for reliable model-driven tool selection.
+This information is important when an LLM is deciding which tool to use.
+
+Poorly designed tools can make tool selection less reliable.
+
+Good MCP tool design should therefore include:
+
+- Clear tool names
+- Accurate descriptions
+- Well-defined input schemas
+- Appropriate boundaries
+- Minimal required permissions
 
 ---
+
+# 21. MCP Inspector
+
+MCP Inspector is a development and testing tool for MCP servers.
+
+It allows developers to:
+
+- Connect to an MCP server
+- Discover available tools
+- Inspect tool descriptions
+- Inspect input schemas
+- Manually call tools
+- Inspect returned results
+
+Run:
+
+```bash
+uv run mcp dev src/server/server.py
+```
+
+This provides a convenient way to verify the MCP server independently of the LLM.
+
+---
+
+# 22. Important MCP Concepts at a Glance
+
+| Concept | Purpose |
+|---|---|
+| Host | AI application that provides the user-facing experience |
+| Client | Connects the host/application to an MCP server |
+| Server | Provides tools, resources, prompts and other capabilities |
+| Tool | Callable capability |
+| Resource | Readable data/context |
+| Prompt | Reusable prompt template |
+| Transport | Carries MCP messages between client and server |
+| stdio | Local process-based transport |
+| Streamable HTTP | Remote/deployed transport |
+| SSE | Legacy HTTP transport |
+| Discovery | Client learns what capabilities are available |
+| Initialization | Establishes the MCP session and negotiates capabilities |
+| Tool call | Client requests execution of a tool |
+| LLM | Reasons about the user request and can select tools |
+
+---
+
+# 23. Manager Q&A
 
 ## Q1. What problem does MCP solve?
 
-MCP provides a standardized protocol for AI applications to discover and interact with external tools and context.
+MCP provides a standardized way for AI applications to discover and interact with external tools, data, and context.
+
+It reduces the need for every AI application to implement a separate integration pattern for every external capability.
 
 ---
 
-## Q2. Why not just call APIs directly?
+## Q2. Why can't we just call APIs directly?
 
-Direct API calls are perfectly valid.
+We can.
 
-MCP is useful when an AI application needs standardized, reusable access to many capabilities and systems.
+Direct API calls are appropriate for many applications.
+
+MCP becomes useful when an AI application needs a standardized way to discover and use multiple capabilities, especially when those capabilities may be shared across different AI applications.
 
 MCP can also sit on top of existing APIs rather than replacing them.
 
 ---
 
-## Q3. Is MCP an alternative to REST?
+## Q3. What is the main advantage of MCP?
 
-Not exactly.
+The main advantage is **standardized AI-to-capability integration**.
 
-REST is an API communication style.
-
-MCP is an AI-oriented protocol for exposing and consuming capabilities and context.
-
-An MCP server can internally call REST APIs.
+The AI application does not need to define a completely different integration mechanism for every MCP-enabled capability.
 
 ---
 
-## Q4. Is MCP an agent framework?
+## Q4. What exactly does MCP standardize?
+
+MCP standardizes the interaction between an MCP client and MCP server, including concepts such as:
+
+- Session lifecycle
+- Capability negotiation
+- Tool discovery
+- Tool invocation
+- Resource access
+- Prompt retrieval
+- Message exchange
+
+The underlying business logic remains the responsibility of the server.
+
+---
+
+## Q5. Is MCP an API?
+
+MCP is a protocol rather than a business API.
+
+An MCP server can expose tools that internally call REST APIs, databases, SDKs, or other services.
+
+---
+
+## Q6. Is MCP an alternative to REST?
 
 No.
 
-MCP provides the integration protocol.
+REST is commonly used for service-to-service communication.
 
-An agent can use MCP to access tools.
+MCP provides a standardized interface for AI applications to interact with tools and context.
 
----
-
-## Q5. Is MCP RAG?
-
-No.
-
-RAG is a retrieval architecture.
-
-MCP is a protocol for connecting AI applications with tools and context providers.
-
-An MCP server could expose a retrieval capability, but MCP itself is not RAG.
+They can work together.
 
 ---
 
-## Q6. Does MCP replace function calling?
+## Q7. What is the difference between MCP and function calling?
 
-No.
+Function calling allows an LLM to request that an application execute a defined function.
 
-Function calling and MCP can work together.
+MCP defines a standardized client-server protocol for discovering and interacting with capabilities.
 
-In this project, the LLM's tool-calling capability is used to decide which MCP tool should be invoked.
+Function calling can therefore be used **with** MCP.
 
----
-
-## Q7. What happens when a new MCP tool is added?
-
-The MCP client can discover the new tool through tool listing.
-
-The application does not necessarily need a new hardcoded integration for every tool.
-
-The model receives the tool name, description, and input schema and can potentially select it when appropriate.
-
----
-
-## Q8. Does the LLM communicate directly with the MCP server?
-
-In this architecture, no.
-
-The application contains the MCP client.
-
-Conceptually:
+A common architecture is:
 
 ```text
 LLM
  |
-AI Application
+ | tool call
+ v
+Application
+ |
+ | MCP
+ v
+MCP Server
+ |
+ v
+Tool
+```
+
+---
+
+## Q8. Who decides which MCP tool to call?
+
+The LLM typically decides which tool is appropriate based on:
+
+- User request
+- Tool name
+- Tool description
+- Input schema
+- Conversation context
+
+The application then performs the MCP call.
+
+The MCP server executes the actual capability.
+
+---
+
+## Q9. Does MCP itself contain an LLM?
+
+No.
+
+MCP is a protocol.
+
+The LLM is a separate component of the AI application.
+
+---
+
+## Q10. Does the LLM communicate directly with the MCP server?
+
+Typically, the application/host uses an MCP client to communicate with the MCP server.
+
+```text
+LLM
+ |
+Host / AI Application
  |
 MCP Client
  |
 MCP Server
 ```
 
-The MCP client handles the protocol communication.
+The client handles the MCP protocol communication.
 
 ---
 
-## Q9. Who decides which tool to call?
+## Q11. What is the difference between a host and a client?
 
-The LLM decides which available tool is appropriate based on the user's question and the tool descriptions/schema.
+The **host** is the AI application.
 
-The application then executes the requested MCP tool through the MCP client.
+The **client** is the MCP component within that application that maintains the connection to an MCP server.
+
+A host can use MCP clients to connect to one or more servers.
 
 ---
 
-## Q10. Can one MCP server have many tools?
+## Q12. What is a transport in MCP?
+
+A transport is the mechanism used to carry MCP messages between the client and server.
+
+Examples include:
+
+- stdio
+- Streamable HTTP
+- legacy SSE
+
+The transport does not define the business capability. It only provides the communication channel.
+
+---
+
+## Q13. Why are we using stdio?
+
+stdio is convenient for local MCP servers.
+
+The client starts the server as a subprocess and communicates with it through standard input and output.
+
+It is simple and does not require a network endpoint.
+
+---
+
+## Q14. Is stdio the only MCP transport?
+
+No.
+
+For current MCP implementations, the main transports to know are:
+
+- **stdio** for local process-based integrations
+- **Streamable HTTP** for remote/deployed servers
+- **SSE** for compatibility with older implementations
+
+Streamable HTTP is the preferred approach for new remote deployments.
+
+---
+
+## Q15. Can an MCP server be remote?
 
 Yes.
 
-This project demonstrates five tools in one MCP server.
+A remote MCP server can be exposed through Streamable HTTP.
 
-A production MCP server could expose many capabilities, depending on its purpose.
+The architecture can then look like:
+
+```text
+AI Application
+      |
+MCP Client
+      |
+HTTP
+      |
+MCP Server
+      |
+External Systems
+```
 
 ---
 
-## Q11. Can multiple MCP servers be used?
+## Q16. What happens during MCP initialization?
+
+The client and server establish the MCP session and negotiate the protocol capabilities they support.
+
+Only after the session is initialized should normal MCP operations proceed.
+
+---
+
+## Q17. How does the client know what tools are available?
+
+The client uses MCP tool discovery.
+
+Conceptually:
+
+```text
+Client
+  |
+  | tools/list
+  v
+Server
+  |
+  | Tool definitions
+  v
+Client
+```
+
+The definitions include information such as names, descriptions, and input schemas.
+
+---
+
+## Q18. Can one MCP server expose multiple tools?
 
 Yes.
 
-An AI application can connect to multiple MCP servers.
+A server can expose multiple related capabilities.
+
+The number and type of tools depend on what the server is designed to provide.
+
+---
+
+## Q19. Can an application connect to multiple MCP servers?
+
+Yes.
 
 For example:
 
 ```text
 AI Application
       |
-      +-- MCP Server: Jira
+      +-- MCP Server → Jira
       |
-      +-- MCP Server: GitHub
+      +-- MCP Server → GitHub
       |
-      +-- MCP Server: Database
+      +-- MCP Server → Database
       |
-      +-- MCP Server: Internal APIs
+      +-- MCP Server → Internal APIs
 ```
 
-This is one of the areas where the standardized protocol becomes particularly useful.
+This is one of the useful architectural benefits of having a standardized protocol.
 
 ---
 
-## Q12. What is the role of MCP Inspector?
+## Q20. What are Tools, Resources and Prompts?
 
-Inspector is a development/testing tool for interacting with an MCP server.
+A simple distinction is:
 
-It allows developers to inspect available capabilities and manually test tools before connecting a complete AI application.
+```text
+Tools
+→ Callable capabilities
+
+Resources
+→ Readable data/context
+
+Prompts
+→ Reusable prompt templates
+```
+
+They serve different purposes within MCP.
 
 ---
 
-## Q13. What happens if the LLM chooses the wrong tool?
+## Q21. Is MCP RAG?
 
-The application should validate tool calls and handle failures.
+No.
 
-In production systems, tool descriptions, schemas, authorization, validation, and guardrails should all be designed carefully.
+RAG is a retrieval architecture used to retrieve relevant information for an LLM.
+
+MCP is a protocol for connecting AI applications with capabilities and context providers.
+
+They can be combined.
 
 ---
 
-## Q14. Can MCP access databases?
+## Q22. Is MCP an agent framework?
+
+No.
+
+An agent is an application pattern involving reasoning, tool selection, execution, observation, and further reasoning.
+
+MCP can provide the tools that an agent uses.
+
+---
+
+## Q23. Is MCP the same as LangChain tools?
+
+No.
+
+LangChain provides application and agent abstractions, including tools.
+
+MCP provides a standardized protocol for connecting AI applications to external capabilities.
+
+A LangChain agent can use MCP tools through an MCP client.
+
+---
+
+## Q24. Can MCP access databases?
 
 Yes.
 
-An MCP tool can query a database and return the relevant result.
+An MCP server can expose database operations through tools or resources.
 
-The MCP server becomes the controlled interface between the AI application and the database.
+The server can control what queries or operations are allowed.
 
 ---
 
-## Q15. Can MCP modify data?
+## Q25. Can MCP modify external systems?
 
-Yes, technically.
+Yes.
 
-A tool can perform actions such as:
+An MCP tool can perform write operations or other side effects.
+
+For example:
 
 ```text
 create_ticket()
 update_customer()
 send_email()
-delete_record()
 ```
 
-However, write operations require appropriate authorization and safeguards.
+However, write-capable tools require appropriate authorization and safeguards.
 
 ---
 
-## Q16. Is MCP only for Anthropic models?
+## Q26. Is MCP only for a particular LLM provider?
 
 No.
 
-MCP is a protocol.
+MCP is independent of the LLM provider.
 
-The LLM provider and MCP server are separate concepts.
-
-An application can use different model providers while communicating with MCP servers.
+The AI application can use different model providers while using MCP to connect to MCP servers.
 
 ---
 
-## Q17. What happens if the MCP server is unavailable?
+## Q27. What happens if the MCP server is unavailable?
 
-The MCP client will not be able to execute the requested capability.
+The client cannot execute capabilities provided by that server.
 
-A production application should handle connection failures, timeouts, and retries appropriately.
+A production application should handle:
 
----
-
-## Q18. Why are we using stdio here?
-
-This project uses stdio because it is simple for a local development/demo environment.
-
-The client launches the MCP server as a subprocess and communicates with it through standard input/output.
-
-For deployed systems, other transports such as Streamable HTTP can be appropriate.
+- Connection failures
+- Timeouts
+- Retries where appropriate
+- Tool errors
+- User-facing failure messages
 
 ---
 
-## Q19. Why don't we implement every MCP feature?
+## Q28. What happens if the LLM selects the wrong tool?
 
-Because the goal of the project is to demonstrate the core MCP workflow.
+The application should not assume that every model-generated tool call is correct.
 
-The project focuses on tools because the business scenario is an action/query-oriented project intelligence use case.
+Production systems should use:
 
-Adding resources and prompts would not necessarily improve this particular demonstration.
+- Clear tool descriptions
+- Strong input schemas
+- Argument validation
+- Authorization
+- Error handling
+- Guardrails where necessary
+
+The MCP server should also enforce its own validation and permissions.
 
 ---
 
-## Q20. What is the biggest benefit of MCP?
+## Q29. Why not create one large tool instead of many small tools?
 
-The biggest benefit is **standardization of AI-to-capability integration**.
+Smaller, well-defined tools are generally easier for both applications and models to understand and reuse.
 
-Instead of every AI application implementing a unique integration mechanism for every external capability, MCP provides a common protocol for discovering and interacting with MCP-enabled servers.
+A large tool can become difficult to describe, validate, secure, and maintain.
+
+Tool boundaries should reflect meaningful capabilities.
+
+---
+
+## Q30. Is MCP always the right choice?
+
+No.
+
+MCP may not be necessary when:
+
+- The application is small.
+- There are only a few tightly coupled functions.
+- The tools are used by only one application.
+- Direct function calls are simpler.
+- There is no need for standardized capability discovery or reuse.
+
+The architecture should determine whether MCP adds value.
 
 ---
