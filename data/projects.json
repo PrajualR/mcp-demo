@@ -1,0 +1,26 @@
+[
+  {
+    "project_id": "P001",
+    "name": "Alpha",
+    "description": "Customer onboarding automation platform",
+    "status": "At Risk",
+    "completion_percentage": 68,
+    "owner_id": "E001"
+  },
+  {
+    "project_id": "P002",
+    "name": "Beta",
+    "description": "Internal document processing platform",
+    "status": "On Track",
+    "completion_percentage": 82,
+    "owner_id": "E002"
+  },
+  {
+    "project_id": "P003",
+    "name": "Gamma",
+    "description": "Payment reconciliation system",
+    "status": "Delayed",
+    "completion_percentage": 54,
+    "owner_id": "E003"
+  }
+]

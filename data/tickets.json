@@ -1,0 +1,42 @@
+[
+  {
+    "ticket_id": "T001",
+    "project_id": "P001",
+    "title": "Customer API timeout",
+    "priority": "High",
+    "status": "Open",
+    "assigned_to": "E001"
+  },
+  {
+    "ticket_id": "T002",
+    "project_id": "P001",
+    "title": "Authentication failure",
+    "priority": "Critical",
+    "status": "Open",
+    "assigned_to": "E001"
+  },
+  {
+    "ticket_id": "T003",
+    "project_id": "P002",
+    "title": "UI alignment issue",
+    "priority": "Low",
+    "status": "Open",
+    "assigned_to": "E002"
+  },
+  {
+    "ticket_id": "T004",
+    "project_id": "P003",
+    "title": "Payment reconciliation mismatch",
+    "priority": "Critical",
+    "status": "Open",
+    "assigned_to": "E003"
+  },
+  {
+    "ticket_id": "T005",
+    "project_id": "P003",
+    "title": "Database performance degradation",
+    "priority": "High",
+    "status": "In Progress",
+    "assigned_to": "E003"
+  }
+]

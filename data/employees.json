@@ -1,0 +1,20 @@
+[
+  {
+    "employee_id": "E001",
+    "name": "Arun Kumar",
+    "role": "Project Manager",
+    "department": "Digital Transformation"
+  },
+  {
+    "employee_id": "E002",
+    "name": "Priya Sharma",
+    "role": "Project Manager",
+    "department": "Engineering"
+  },
+  {
+    "employee_id": "E003",
+    "name": "Rahul Menon",
+    "role": "Project Manager",
+    "department": "Payments"
+  }
+]
